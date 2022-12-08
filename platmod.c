@@ -9,12 +9,17 @@
 #include <linux/poll.h>
 #include <linux/spinlock.h> 
 #include <linux/errno.h>
+#include <linux/usb.h>
 
 #include "platmod.h"
 
 #define SUCCESS 0
 #define DEVICE_NAME "platmod"
 #define DEFAULT_STACK_SIZE 8
+
+// Bus 001 Device 007: ID 13fe:4200 Kingston Technology Company Inc. Platinum USB drive mini
+#define VENDOR_ID 0x13fe
+#define PRODUCT_ID 0x4200
 
 static struct class *cls;
 
@@ -186,10 +191,16 @@ static struct file_operations fops = {
 };
 
 
-static int __init chardev2_init(void) {
-    int ret_val;
+struct usb_device_id platmod_table[] = {
+    { USB_DEVICE(VENDOR_ID, PRODUCT_ID) },
+    { }
+};
 
-    printk(KERN_INFO "Starting platmod\n");
+MODULE_DEVICE_TABLE(usb, platmod_table);
+
+static int platmod_probe(struct usb_interface *interface, const struct usb_device_id *id) {
+    int ret_val;
+    printk(KERN_INFO "Creating device");
 
     ret_val = register_chrdev(MAJOR_NUM, DEVICE_NAME, &fops);    
     if (ret_val < 0) {
@@ -202,21 +213,51 @@ static int __init chardev2_init(void) {
 
     printk(KERN_INFO "Device created on /dev/%s\n", DEVICE_FILE_NAME);
 
+    printk(KERN_INFO "Platmod drive (%04X:%04X) plugged", id->idVendor, id->idProduct);
+    return SUCCESS;
+}
+
+static void platmod_disconnect(struct usb_interface *interface) {
+    device_destroy(cls, MKDEV(MAJOR_NUM, 0));
+    class_destroy(cls);
+    
+    unregister_chrdev(MAJOR_NUM, DEVICE_NAME);
+
+    printk(KERN_INFO "Platmod drive removed");
+}
+
+static struct usb_driver platmod_driver = {
+    .name = "platmod",
+    .id_table = platmod_table,
+    .probe = platmod_probe,
+    .disconnect = platmod_disconnect,
+};
+
+
+static int __init chardev2_init(void) {
+    int ret_val;
+
+    printk(KERN_INFO "Starting platmod\n");
+
+    ret_val = usb_register(&platmod_driver);
+    if (ret_val < 0) {
+        printk(KERN_ALERT "Failed to register usb driver with error code %d\n", ret_val);
+        return ret_val;
+    }
+
     ret_val = stack_init();
     if (ret_val < 0) {
         printk(KERN_INFO "Failed to create stack with error code %d", ret_val);
         return ret_val;
     }
+    printk(KERN_INFO "Stack created\n");
 
     return ret_val;
 }
 
 static void __exit chardev2_exit(void) {
     printk(KERN_INFO "Exiting platmod\n");
-    device_destroy(cls, MKDEV(MAJOR_NUM, 0));
-    class_destroy(cls);
-    
-    unregister_chrdev(MAJOR_NUM, DEVICE_NAME);
+    usb_deregister(&platmod_driver);
 
     stack_destroy();
     printk(KERN_INFO "Stack destroyed\n");
